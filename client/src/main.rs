@@ -10,7 +10,7 @@ use ureq::Error;
 
 fn main() {
     let token = authentication();
-    if !token.is_empty(){
+    if !token.is_empty() {
         uplpoad(token.clone());
         get_list(token.clone());
         download(token.clone());
@@ -29,7 +29,7 @@ struct ComputedChallenge {
     challenge: [u8; 32],
 }
 
-fn authentication() -> String{
+fn authentication() -> String {
     // demande du challenge au serveur
     let res = ureq::get("http://127.0.0.1:8080/server/jerome")
         .call()
@@ -81,12 +81,12 @@ fn authentication() -> String{
     };
 }
 
-fn get_list(token : String) {
+fn get_list(token: String) {
     /*ureq::get("http://127.0.0.1:8080/server/jerome/list")
     .call()
     .unwrap();*/
 }
 
-fn uplpoad(token : String) {}
+fn uplpoad(token: String) {}
 
-fn download(token : String) {}
+fn download(token: String) {}

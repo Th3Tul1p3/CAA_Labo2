@@ -1,4 +1,4 @@
-use actix_web::{get, post, web/*, Error, HttpRequest*/, HttpResponse};
+use actix_web::{get, post, web , Error/*, HttpRequest*/, HttpResponse};
 use futures::StreamExt;
 //use aead::{generic_array::GenericArray, Aead, NewAead};
 //use aes_gcm::Aes256Gcm; // Or `Aes128Gcm`
@@ -137,11 +137,11 @@ async fn username_post(
 
     // on teste si les valeurs sont identiques
     if challenge == computed_challenge.challenge {
-        let user_token : String = Uuid::new_v4().hyphenated().to_string();
+        let user_token: String = Uuid::new_v4().hyphenated().to_string();
         unsafe {
             USER_TOKEN.push((user_id, user_token.clone()));
         }
-        return HttpResponse::Ok().header("Token",user_token).finish();
+        return HttpResponse::Ok().header("Token", user_token).finish();
     }
     HttpResponse::NonAuthoritativeInformation().finish()
 }
@@ -162,13 +162,35 @@ async fn body(mut body: web::Payload, req: HttpRequest) -> Result<HttpResponse, 
     Ok(HttpResponse::Ok().finish())
 }*/
 
+#[get("/server/upload")]
+async fn upload() -> Result<HttpResponse, Error> {
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[get("/server/download")]
+async fn download() -> Result<HttpResponse, Error> {
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[get("/server/download")]
+async fn get_list() -> Result<HttpResponse, Error> {
+    Ok(HttpResponse::Ok().finish())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     println!("Le serveur est prêt à recevoir des requêtes");
     use actix_web::{App, HttpServer};
 
-    HttpServer::new(|| App::new().service(username).service(username_post))
-        .bind("127.0.0.1:8080")?
-        .run()
-        .await
+    HttpServer::new(|| {
+        App::new()
+            .service(username)
+            .service(username_post)
+            .service(upload)
+            .service(download)
+            .service(get_list)
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
