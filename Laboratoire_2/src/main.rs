@@ -22,7 +22,7 @@ fn main() {
     let random_u64 = OsRng.next_u64();
     println!("{:?}", random_u64);
 
-    let mut file = File::open("/home/jerome/test.txt").expect("Unable to open the file");
+    let mut file = File::open("/test.txt").expect("Unable to open the file");
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .expect("Unable to read the file");

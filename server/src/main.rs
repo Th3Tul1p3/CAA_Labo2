@@ -1,19 +1,19 @@
-use actix_web::{get, post, web , Error/*, HttpRequest*/, HttpResponse};
+use actix_web::{get, post, web, Error /*, HttpRequest*/, HttpResponse};
 use futures::StreamExt;
 //use aead::{generic_array::GenericArray, Aead, NewAead};
 //use aes_gcm::Aes256Gcm; // Or `Aes128Gcm`
-use hmac::{Hmac, Mac, NewMac};
-use rand_core::{OsRng, RngCore};
-use sha2::Sha256;
-use sodiumoxide::crypto::pwhash::argon2id13;
-//use std::fs::File;
-//use std::io::prelude::*;
 use crate::argon2id13::Salt;
+use hmac::{Hmac, Mac, NewMac};
 use lazy_static::lazy_static;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json;
+use sha2::Sha256;
+use sodiumoxide::crypto::pwhash::argon2id13;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::fs::File;
+use std::io::prelude::*;
 use std::str;
 use uuid::Uuid;
 
@@ -74,7 +74,7 @@ lazy_static! {
     };
 }
 
-#[get("/server/{user_id}")] // <- define path parameters
+#[get("/server/{user_id}")]
 async fn username(web::Path(user_id): web::Path<String>) -> HttpResponse {
     match USER_DB.get::<str>(&user_id.to_string()) {
         Some(username) => {
@@ -136,6 +136,7 @@ async fn username_post(
         .expect("Wrong length");
 
     // on teste si les valeurs sont identiques
+    println!("{:?} {:?}", challenge, computed_challenge.challenge);
     if challenge == computed_challenge.challenge {
         let user_token: String = Uuid::new_v4().hyphenated().to_string();
         unsafe {
@@ -162,19 +163,32 @@ async fn body(mut body: web::Payload, req: HttpRequest) -> Result<HttpResponse, 
     Ok(HttpResponse::Ok().finish())
 }*/
 
-#[get("/server/upload")]
-async fn upload() -> Result<HttpResponse, Error> {
-    Ok(HttpResponse::Ok().finish())
+#[post("/upload")]
+async fn upload(mut body: web::Payload) -> HttpResponse {
+    // lire et vérifier le Token
+
+    // lire le body
+    let mut bytes = web::BytesMut::new();
+    while let Some(item) = body.next().await {
+        let item = item.unwrap();
+        bytes.extend_from_slice(&item);
+    }
+    let res: Vec<u8> = bytes.to_vec();
+
+    let mut file = File::create("foo.txt").unwrap();
+    file.write_all(&res).unwrap();
+    println!("{:?}", res);
+    HttpResponse::Ok().finish()
 }
 
-#[get("/server/download")]
-async fn download() -> Result<HttpResponse, Error> {
-    Ok(HttpResponse::Ok().finish())
+#[get("/download")]
+async fn download() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[get("/server/download")]
-async fn get_list() -> Result<HttpResponse, Error> {
-    Ok(HttpResponse::Ok().finish())
+#[get("/list")]
+async fn get_list() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
 #[actix_web::main]
