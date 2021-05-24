@@ -115,14 +115,13 @@ fn get_list(token: String) {
 }
 
 fn uplpoad(token: String, pub_key: PublicKey, file_name: String) -> bool {
-    let work_file = env::temp_dir().join(&file_name);
+    let work_file = env::current_dir().unwrap().join(&file_name);
 
     // ouvrir et lire le fichier
     let mut file = File::open(work_file).expect("Unable to open the file");
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .expect("Unable to read the file");
-    println!("{}", contents);
 
     // dérivation de la clé
     let salt = argon2id13::gen_salt();
@@ -142,6 +141,7 @@ fn uplpoad(token: String, pub_key: PublicKey, file_name: String) -> bool {
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     let nonce_aes = GenericArray::from_slice(&nonce);
+
     // chiffrement AES-GCM
     let ciphertext = aead
         .encrypt(nonce_aes, contents.as_bytes().as_ref())
@@ -160,18 +160,33 @@ fn uplpoad(token: String, pub_key: PublicKey, file_name: String) -> bool {
         key: _encrypted_key,
     };
 
-    let temp_directory = env::temp_dir();
-    let temp_file = temp_directory.join("file.metadata");
-    File::create(temp_file).unwrap();
+    let mut metada_file = file_name.to_owned();
+    metada_file.push_str(".metadata");
+    let metadata_file = env::current_dir().unwrap().join(&metada_file);
+    File::create(&metadata_file).unwrap();
 
     let serialized_metadata = serde_json::to_string(&metadata).unwrap();
-    fs::write("file.metadata", serialized_metadata).unwrap();
 
     // mettre le chiffré dans le body et envoyer avec le token et le nom de fichier
     match ureq::post("http://127.0.0.1:8080/upload")
         .set("FileName", &file_name)
         .set("Token", &token)
         .send_bytes(&ciphertext)
+    {
+        Ok(_) => {
+        }
+        Err(Error::Status(code, response)) => {
+            println!("{:?} {:?}", code, response);
+        }
+        Err(_) => {
+        }
+    };
+
+    // mettre le chiffré dans le body et envoyer avec le token et le nom de fichier
+    match ureq::post("http://127.0.0.1:8080/upload")
+        .set("FileName", &metada_file)
+        .set("Token", &token)
+        .send_string(&serialized_metadata)
     {
         Ok(_) => {
             return true;

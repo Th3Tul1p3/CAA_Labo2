@@ -1,4 +1,4 @@
-use actix_web::{get, post, web, Error /*, HttpRequest*/, HttpResponse};
+use actix_web::{get, post, web, Error, HttpRequest, HttpResponse};
 use futures::StreamExt;
 //use aead::{generic_array::GenericArray, Aead, NewAead};
 //use aes_gcm::Aes256Gcm; // Or `Aes128Gcm`
@@ -136,7 +136,6 @@ async fn username_post(
         .expect("Wrong length");
 
     // on teste si les valeurs sont identiques
-    println!("{:?} {:?}", challenge, computed_challenge.challenge);
     if challenge == computed_challenge.challenge {
         let user_token: String = Uuid::new_v4().hyphenated().to_string();
         unsafe {
@@ -164,8 +163,12 @@ async fn body(mut body: web::Payload, req: HttpRequest) -> Result<HttpResponse, 
 }*/
 
 #[post("/upload")]
-async fn upload(mut body: web::Payload) -> HttpResponse {
+async fn upload(mut body: web::Payload, req: HttpRequest) -> HttpResponse {
     // lire et vérifier le Token
+    let token : &str = req.headers().get("Token").unwrap().to_str().unwrap();
+    if !check_token(token){
+        return HttpResponse::NonAuthoritativeInformation().finish();
+    }
 
     // lire le body
     let mut bytes = web::BytesMut::new();
@@ -175,19 +178,30 @@ async fn upload(mut body: web::Payload) -> HttpResponse {
     }
     let res: Vec<u8> = bytes.to_vec();
 
-    let mut file = File::create("foo.txt").unwrap();
+    let filename : &str = req.headers().get("filename").unwrap().to_str().unwrap();
+    println!("{:?}", filename);
+    let mut file = File::create(filename).unwrap();
     file.write_all(&res).unwrap();
-    println!("{:?}", res);
     HttpResponse::Ok().finish()
 }
 
 #[get("/download")]
-async fn download() -> HttpResponse {
+async fn download(req: HttpRequest) -> HttpResponse {
+    // lire et vérifier le Token
+    let token : &str = req.headers().get("Token").unwrap().to_str().unwrap();
+    if !check_token(token){
+        return HttpResponse::NonAuthoritativeInformation().finish();
+    }
     HttpResponse::Ok().finish()
 }
 
 #[get("/list")]
-async fn get_list() -> HttpResponse {
+async fn get_list(req: HttpRequest) -> HttpResponse {
+    // lire et vérifier le Token
+    let token : &str = req.headers().get("Token").unwrap().to_str().unwrap();
+    if !check_token(token){
+        return HttpResponse::NonAuthoritativeInformation().finish();
+    }
     HttpResponse::Ok().finish()
 }
 
@@ -207,4 +221,15 @@ async fn main() -> std::io::Result<()> {
     .bind("127.0.0.1:8080")?
     .run()
     .await
+}
+
+fn check_token (token:&str)-> bool{
+    unsafe {
+        for pair in USER_TOKEN.iter(){
+            if pair.1 == token{
+                return true;
+            }
+        }
+    }
+    return false;
 }
