@@ -1,7 +1,7 @@
 use crate::argon2id13::Salt;
 use actix_web::{get, post, web, HttpRequest, HttpResponse};
-use aead::{generic_array::GenericArray, Aead, NewAead};
-use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, NewAead};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use futures::StreamExt;
 use google_authenticator::{ErrorCorrectionLevel, GoogleAuthenticator};
 use hmac::{Hmac, Mac, NewMac};
@@ -65,10 +65,8 @@ let auth = GoogleAuthenticator::new();
             &mut key,
             "P@ssw0rd".as_bytes(),
             &salt,
-            /*argon2id13::OPSLIMIT_SENSITIVE,
-            argon2id13::MEMLIMIT_SENSITIVE,*/
-            argon2id13::OPSLIMIT_INTERACTIVE,
-            argon2id13::MEMLIMIT_INTERACTIVE,
+            argon2id13::OPSLIMIT_SENSITIVE,
+            argon2id13::MEMLIMIT_SENSITIVE,
         )
         .unwrap();
         map.insert(
@@ -255,24 +253,17 @@ async fn download(req: HttpRequest) -> HttpResponse {
 #[get("/list")]
 async fn get_list(req: HttpRequest) -> HttpResponse {
     // lire et vérifier le Token
-    let user_name: &str = req.headers().get("Username").unwrap().to_str().unwrap();
-    // check dans la DB si l'utilisateur est présent
-    let user = match USER_DB.get::<str>(&user_name.to_string()) {
-        Some(user) => user,
-        None => {
-            return HttpResponse::NotFound().finish();
-        }
-    };
-
-    // préparation des clés pour AES-GCM et du nonce
-    let key_aes = GenericArray::clone_from_slice(&user.password_kdf);
-    let aead = Aes256Gcm::new(key_aes);
-
     if !check_token(&req) {
         return HttpResponse::NonAuthoritativeInformation().finish();
     }
+    let user_name: &str = req.headers().get("Username").unwrap().to_str().unwrap();
 
-    let mut file_list: Vec<String> = Vec::new();
+    // préparation des clés pour AES-GCM et du nonce
+    let key_aes = Key::from_slice(b"an example very very secret key.");
+    let aead = Aes256Gcm::new(key_aes);
+    let nonce = Nonce::from_slice(b"unique nonce");
+
+    let mut file_list = String::new();
     // on lit le contenu du répertoire
     let paths = fs::read_dir("./").unwrap();
 
@@ -287,11 +278,15 @@ async fn get_list(req: HttpRequest) -> HttpResponse {
                 .expect("Unable to read the file");
             let meta: Metadata = serde_json::from_str(&contents).unwrap();
             if meta.username.contains(&user_name.to_string()) {
-                file_list.push(file.split(".metadata").collect());
+                file_list.push_str(&file.split(".metadata").collect::<String>());
+                file_list.push('\n');
             }
         }
     }
-    HttpResponse::Ok().body(serde_json::to_string(&file_list).unwrap())
+    let ciphertext = aead
+        .encrypt(nonce, file_list.as_bytes())
+        .expect("encryption failure!");
+    HttpResponse::Ok().body(ciphertext)
 }
 
 #[actix_web::main]
@@ -314,6 +309,7 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
+// vérification double facteur
 pub fn verifiy_2fa(user_secret: &str, token: String) -> bool {
     let auth = GoogleAuthenticator::new();
     if !auth.verify_code(user_secret, &token, 0, 0) {
@@ -323,6 +319,7 @@ pub fn verifiy_2fa(user_secret: &str, token: String) -> bool {
     true
 }
 
+// vérifie si le token existe et appartient au bon utilisateur
 fn check_token(req: &HttpRequest) -> bool {
     let token: &str = req.headers().get("Token").unwrap().to_str().unwrap();
     let user: &str = req.headers().get("Username").unwrap().to_str().unwrap();

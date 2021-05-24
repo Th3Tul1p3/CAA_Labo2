@@ -21,7 +21,7 @@ Lors de l'utilisation d'argon2id pour dériver des clés, je me suis basé sur l
 - Taille de sel: 128 bits 
 - Temps d'exécution: 1 sec
 
-Le choix de ces constantes s’appuie en partie sur les conseils donnés en CAA et sur une appréciation personnelle des capacités de calcul d'un ordinateur moyen.  Ces paramètres sont supposés communs entre le client et le serveur.
+Le choix de ces constantes s’appuie en partie sur les conseils donnés en CAA et sur une appréciation personnelle des capacités de calcul d'un ordinateur moyen.  Ces paramètres sont supposés communs entre le client et le serveur. Le temps d'une seconde est aussi assez décourageant pour un attaquant mais n'altère pas l'expérience utilisateur.
 
 # Protocole d'authentification
 
@@ -33,9 +33,11 @@ Le choix de ces constantes s’appuie en partie sur les conseils donnés en CAA 
 
 - Le client renvoie un MAC fait avec la clé dérivée d'argon2id et du nombre aléatoire envoyé par le serveur. 
 
-- Si c'est en ordre, le serveur répond avec un "Hello <username> " 
+- Si c'est en ordre, le serveur répond avec la demande de son jeton de double authentification.
 
-  Sinon, le serveur renvoie un message d'erreur.
+- Si c'est toujours en ordre, le serveur lui attribue un jeton d'authentification pour les prochaines requêtes
+
+  
 
 ```sequence
 Client->>Serveur: <username>
@@ -43,6 +45,7 @@ Serveur->>Client: Nonce + Salt(argon2id)
 Client->>Serveur: HMAC(Nonce)
 Serveur->>Client: Ask 2fa code
 Client->>Serveur: 2fa code
+Serveur->>Client: Token d'authentification
 ```
 
 Une fois cette première étape passée, Une vérification à double facteur intervient. Je me baserais sur google authenticator. 
@@ -53,6 +56,22 @@ Pour le chiffrement des fichiers, j'ai choisi le chiffrement symétrique avec AE
 
 Si Alice veut partagé un fichier avec Bob et Pierre, la clé symétrique sera envoyée en trois exemplaires. Chaque exemplaires sera signé avec la clé public d'un des participants. 
 
-Le déroulement du chiffrement est illustré ci-dessous. La personne voulant chiffrer son fichier va le faire avec la clé symétrique (ici en bleu). Puis la clé symétrique va elle aussi être chiffrée par la clé publique (ici en brun) de la personne effectuant le chiffrement. Ces deux éléments seront ensuite envoyé au serveur.
+Le déroulement du chiffrement est illustré ci-dessous. La personne voulant chiffrer son fichier va le faire avec la clé symétrique (ici en bleu). Puis la clé symétrique va elle aussi être chiffrée par la clé publique (ici en brun) de la personne effectuant le chiffrement. Ces deux éléments seront ensuite envoyé au serveur. 
 
 ![](img/1.png)
+
+Les éléments tel que nonce pour le chiffrement symétrique et sel pour la dérivation des clés seront aussi stockés sur le serveur mais n'apparaissent pas sur le schéma pour améliorer sa lisibilité.
+
+# Implémentation
+
+Pour le lancement de l'application:
+
+```sh
+cd server && cargo run 
+// attendre que le serveur affiche "Le serveur est prêt à recevoir des requêtes"
+cd client && cargo run 
+```
+
+le client va faire une authentification, un upload d'un fichier, demander la liste des fichiers qu'il peut lire et le téléchargement du même fichier.
+
+L'envoi de la liste chiffrée est malheureusement très simplifié car l'envoi de manière sécurisée, comme pour les fichiers, aurait nettement complexifié l'architecture et je n'avais pas le temps de l'implémenter. Mais c'est quand même chiffré pour respecter la consigne.  

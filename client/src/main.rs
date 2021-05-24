@@ -1,8 +1,7 @@
 use crate::argon2id13::Salt;
-use aead::{generic_array::GenericArray, Aead, NewAead};
-use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, NewAead};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use ecies::{decrypt, encrypt, utils::generate_keypair, PublicKey, SecretKey};
-use generic_array::typenum::{UInt, UTerm, B0, B1};
 use hmac::{Hmac, Mac, NewMac};
 use rand_core::{OsRng, RngCore};
 use read_input::prelude::*;
@@ -19,11 +18,16 @@ use ureq;
 use ureq::Error;
 
 fn main() {
+    println!("Génération de votre paire de clé asymétrique");
     let (sk, pk) = generate_keypair();
+    println!("Début du processus d'authentification");
     let token = authentication();
     if !token.is_empty() {
+        println!("Vous êtes authentifié, upload du fichier [shadow]");
         uplpoad(token.clone(), pk, "shadow".to_string());
+        println!("Demande la liste des fichiers que vous pouvez consulter");
         get_list(token.clone());
+        println!("Téléchargement du fichier shadow");
         download(token.clone(), "shadow".to_string(), sk);
     }
 }
@@ -65,8 +69,8 @@ fn authentication() -> String {
         &mut key,
         "P@ssw0rd".as_bytes(),
         &user_challenge.salt,
-        argon2id13::OPSLIMIT_INTERACTIVE,
-        argon2id13::MEMLIMIT_INTERACTIVE,
+        argon2id13::OPSLIMIT_SENSITIVE,
+        argon2id13::MEMLIMIT_SENSITIVE,
     )
     .unwrap();
 
@@ -130,16 +134,24 @@ fn get_list(token: String) {
     let resp = ureq::get("http://127.0.0.1:8080/list")
         .set("Token", &token)
         .set("Username", "jerome")
-        .call()
-        .unwrap()
-        .into_string()
-        .unwrap();
+        .call().unwrap();
+
+    let mut test = resp.into_reader();
+    let mut buf = Vec::new();
+    test.read_to_end(& mut buf).unwrap();
+
+    let key_aes = Key::from_slice(b"an example very very secret key.");
+    let aead = Aes256Gcm::new(key_aes);
+    let nonce = Nonce::from_slice(b"unique nonce");
+
+    let plaintext = aead
+        .decrypt(nonce, buf.as_ref())
+        .expect("decryption failure!");
 
     // désérialisation sur challenge reçu
-    let list: Vec<String> = serde_json::from_str(&resp).unwrap();
     println!(
-        "Voici la liste des fichiers auxquelles vous avez accès: {:?}",
-        list
+        "Voici la liste des fichiers auxquelles vous avez accès: \n{}",
+        String::from_utf8(plaintext).unwrap()
     );
 }
 
@@ -159,17 +171,17 @@ fn uplpoad(token: String, pub_key: PublicKey, file_name: String) {
         &mut key,
         "P@ssw0rd".as_bytes(),
         &salt,
-        argon2id13::OPSLIMIT_INTERACTIVE,
-        argon2id13::MEMLIMIT_INTERACTIVE,
+        argon2id13::OPSLIMIT_SENSITIVE,
+        argon2id13::MEMLIMIT_SENSITIVE,
     )
     .unwrap();
 
     // préparation des clés pour AES-GCM et du nonce
-    let key_aes = GenericArray::clone_from_slice(&key);
+    let key_aes = Key::from_slice(&key);
     let aead = Aes256Gcm::new(key_aes);
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
-    let nonce_aes = GenericArray::from_slice(&nonce);
+    let nonce_aes = Nonce::from_slice(&nonce);
 
     // chiffrement des données AES-GCM
     let ciphertext = aead
@@ -258,12 +270,9 @@ fn download(token: String, file_name: String, sk: SecretKey) {
 
     // déchiffrer les données
     // préparation des clés pour AES-GCM et du nonce
-    let key_aes = GenericArray::clone_from_slice(&decrypted_key);
-    let aead = Aes256Gcm::new(key_aes);
-    let nonce_aes: aead::generic_array::GenericArray<
-        u8,
-        UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>,
-    > = *GenericArray::from_slice(&metadata.nonce);
+    let key_aes = Key::clone_from_slice(&decrypted_key);
+    let aead = Aes256Gcm::new(&key_aes);
+    let nonce_aes = Nonce::from_slice(&metadata.nonce);
 
     // chiffrement des données AES-GCM
     let plaintext = aead
@@ -271,7 +280,10 @@ fn download(token: String, file_name: String, sk: SecretKey) {
         .expect("encryption failure!");
     let string: String = String::from_utf8_lossy(&plaintext).to_string();
 
-    println!("{:?}", String::from_utf8_lossy(&plaintext));
+    println!(
+        "Le contenu du fichier téléchargé est: \n{}",
+        String::from_utf8_lossy(&plaintext)
+    );
 
     // écrire dans un fichier
     let mut file = File::create("filename").unwrap();
