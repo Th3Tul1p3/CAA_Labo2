@@ -2,10 +2,10 @@ use crate::argon2id13::Salt;
 use aead::{generic_array::GenericArray, Aead, NewAead};
 use aes_gcm::Aes256Gcm;
 use ecies::{decrypt, encrypt, utils::generate_keypair, PublicKey, SecretKey};
-
 use generic_array::typenum::{UInt, UTerm, B0, B1};
 use hmac::{Hmac, Mac, NewMac};
 use rand_core::{OsRng, RngCore};
+use read_input::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::Sha256;
@@ -20,7 +20,6 @@ use ureq::Error;
 
 fn main() {
     let (sk, pk) = generate_keypair();
-
     let token = authentication();
     if !token.is_empty() {
         uplpoad(token.clone(), pk, "shadow".to_string());
@@ -71,7 +70,7 @@ fn authentication() -> String {
     )
     .unwrap();
 
-    // exécution du hmac de la valeur reçue
+    // process du hmac de la valeur reçue
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_varkey(&key).expect("HMAC Error");
     mac.update(&user_challenge.challenge.to_be_bytes());
@@ -87,6 +86,32 @@ fn authentication() -> String {
     match ureq::post("http://127.0.0.1:8080/server/jerome")
         .set("Username", &user_challenge.username)
         .send_string(&serde_json::to_string(&challenge).unwrap())
+    {
+        Ok(_) => {}
+        Err(Error::Status(code, response)) => {
+            println!("{:?} {:?}", code, response);
+        }
+        Err(_) => {}
+    };
+
+    // normalement fait dans lors de l'enregistrement
+    // affichage de l'URL du secret
+    let url = ureq::get("http://127.0.0.1:8080/2fa/jerome")
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    println!("L'url de votre secret {:?}", url);
+
+    // attend l'entrée utilisateur du code
+    let input_token: String = input()
+        .repeat_msg("Veuillez rentrer votre jeton de double authentification s.v.p.\n")
+        .get();
+
+    // si le code est ok, on reçoit un token pour les futures échanges
+    match ureq::post("http://127.0.0.1:8080/2fa/jerome")
+        .set("Code", &input_token)
+        .call()
     {
         Ok(request) => {
             return request.header("Token").unwrap().to_string();
@@ -118,7 +143,7 @@ fn get_list(token: String) {
     );
 }
 
-fn uplpoad(token: String, pub_key: PublicKey, file_name: String) -> bool {
+fn uplpoad(token: String, pub_key: PublicKey, file_name: String) {
     let work_file = env::current_dir().unwrap().join(&file_name);
 
     // ouvrir et lire le fichier
@@ -195,16 +220,11 @@ fn uplpoad(token: String, pub_key: PublicKey, file_name: String) -> bool {
         .set("Username", "jerome")
         .send_string(&serialized_metadata)
     {
-        Ok(_) => {
-            return true;
-        }
+        Ok(_) => {}
         Err(Error::Status(code, response)) => {
             println!("{:?} {:?}", code, response);
-            return false;
         }
-        Err(_) => {
-            return false;
-        }
+        Err(_) => {}
     };
 }
 
@@ -252,8 +272,8 @@ fn download(token: String, file_name: String, sk: SecretKey) {
     let string: String = String::from_utf8_lossy(&plaintext).to_string();
 
     println!("{:?}", String::from_utf8_lossy(&plaintext));
-    // écrire dans un fichier
 
+    // écrire dans un fichier
     let mut file = File::create("filename").unwrap();
     file.write_all(&string.as_bytes()).unwrap();
 }

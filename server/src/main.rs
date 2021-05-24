@@ -1,8 +1,7 @@
-use actix_web::{get, post, web, Error, HttpRequest, HttpResponse};
-use futures::StreamExt;
-//use aead::{generic_array::GenericArray, Aead, NewAead};
-//use aes_gcm::Aes256Gcm; // Or `Aes128Gcm`
 use crate::argon2id13::Salt;
+use actix_web::{get, post, web, HttpRequest, HttpResponse};
+use futures::StreamExt;
+use google_authenticator::{ErrorCorrectionLevel, GoogleAuthenticator};
 use hmac::{Hmac, Mac, NewMac};
 use lazy_static::lazy_static;
 use rand_core::{OsRng, RngCore};
@@ -12,6 +11,8 @@ use sha2::Sha256;
 use sodiumoxide::crypto::pwhash::argon2id13;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::env;
+use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::str;
@@ -36,8 +37,11 @@ struct UserChallenge {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct SaltArgon {
-    salt: Salt,
+struct Metadata {
+    file_name: String,
+    username: Vec<String>,
+    nonce: [u8; 12],
+    key: Vec<u8>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -48,9 +52,11 @@ struct ComputedChallenge {
 lazy_static! {
     static ref USER_DB: HashMap<&'static str, User> = {
         let mut map = HashMap::new();
+        // configuration google authenticator
+let auth = GoogleAuthenticator::new();
 
-        // Cette partie se fait normalement sur le client mais est volontairement
-        // mise sur le serveur pour simplifié
+        // Cette partie se fait normalement sur le client mais elle est volontairement
+        // mise sur le serveur pour simplifié l'architecture
         let salt = argon2id13::gen_salt();
         let mut key = [0u8; 32];
         argon2id13::derive_key(
@@ -67,7 +73,7 @@ lazy_static! {
                 username: "jerome".to_string(),
                 salt: salt,
                 password_kdf: key,
-                secret: "salut".to_string(),
+                secret: auth.create_secret(32),
             },
         );
         map
@@ -76,17 +82,18 @@ lazy_static! {
 
 #[get("/server/{user_id}")]
 async fn username(web::Path(user_id): web::Path<String>) -> HttpResponse {
+    // regarde si l'utilisateur est dans la DB, si oui on lui envoie un challenge à résoudre
     match USER_DB.get::<str>(&user_id.to_string()) {
         Some(username) => {
-            let m = UserChallenge {
+            let user_challenge = UserChallenge {
                 username: user_id.to_string(),
                 salt: username.salt,
                 challenge: OsRng.next_u64(),
             };
             unsafe {
-                USER_CHALLENGE.push((user_id, m.challenge));
+                USER_CHALLENGE.push((user_id, user_challenge.challenge));
             }
-            HttpResponse::Ok().body(serde_json::to_string(&m).unwrap())
+            HttpResponse::Ok().body(serde_json::to_string(&user_challenge).unwrap())
         }
         None => HttpResponse::NotFound().finish(),
     }
@@ -137,36 +144,70 @@ async fn username_post(
 
     // on teste si les valeurs sont identiques
     if challenge == computed_challenge.challenge {
-        let user_token: String = Uuid::new_v4().hyphenated().to_string();
-        unsafe {
-            USER_TOKEN.push((user_id, user_token.clone()));
-        }
-        return HttpResponse::Ok().header("Token", user_token).finish();
+        return HttpResponse::Ok().finish();
     }
     HttpResponse::NonAuthoritativeInformation().finish()
 }
 
-/*#[get("/body")]
-async fn body(mut body: web::Payload, req: HttpRequest) -> Result<HttpResponse, Error> {
-    let mut bytes = web::BytesMut::new();
-    while let Some(item) = body.next().await {
-        let item = item?;
-        bytes.extend_from_slice(&item);
+#[get("/2fa/{user_id}")]
+async fn get_code(web::Path(user_id): web::Path<String>) -> HttpResponse {
+    // configuration google authenticator
+    let auth = GoogleAuthenticator::new();
+
+    // check dans la DB si l'utilisateur est présent
+    let user = match USER_DB.get::<str>(&user_id.to_string()) {
+        Some(user) => user,
+        None => {
+            return HttpResponse::NotFound().finish();
+        }
+    };
+
+    // création du code QR
+    let url = auth.qr_code_url(
+        &user.secret,
+        "qr_code",
+        "name",
+        200,
+        200,
+        ErrorCorrectionLevel::High,
+    );
+
+    HttpResponse::Ok().body(url)
+}
+
+#[post("/2fa/{user_id}")]
+async fn validate_code(web::Path(user_id): web::Path<String>, req: HttpRequest) -> HttpResponse {
+    // configuration google authenticator
+    let auth = GoogleAuthenticator::new();
+
+    // check dans la DB si l'utilisateur est présent
+    let user = match USER_DB.get::<str>(&user_id.to_string()) {
+        Some(user) => user,
+        None => {
+            return HttpResponse::NotFound().finish();
+        }
+    };
+
+    // récupère le code dans le header
+    let input_code: &str = req.headers().get("Code").unwrap().to_str().unwrap();
+    if !auth.verify_code(&user.secret, &input_code, 0, 0) {
+        println!("Mauvais code.");
+        return HttpResponse::Unauthorized().finish();
     }
-    let test = req.headers().get("test").unwrap();
-    println!("{:?}", test);
-    println!("{:?}", &bytes);
+
+    // si ok, un token est envoyé à l'utilisateur pour les prochains échanges
+    let user_token: String = Uuid::new_v4().hyphenated().to_string();
     unsafe {
-        //USER_TOKEN.push("jerome".to_string());
+        USER_TOKEN.push((user_id, user_token.clone()));
     }
-    Ok(HttpResponse::Ok().finish())
-}*/
+
+    HttpResponse::Ok().header("Token", user_token).finish()
+}
 
 #[post("/upload")]
 async fn upload(mut body: web::Payload, req: HttpRequest) -> HttpResponse {
     // lire et vérifier le Token
-    let token : &str = req.headers().get("Token").unwrap().to_str().unwrap();
-    if !check_token(token){
+    if !check_token(&req) {
         return HttpResponse::NonAuthoritativeInformation().finish();
     }
 
@@ -178,9 +219,8 @@ async fn upload(mut body: web::Payload, req: HttpRequest) -> HttpResponse {
     }
     let res: Vec<u8> = bytes.to_vec();
 
-    let filename : &str = req.headers().get("filename").unwrap().to_str().unwrap();
-    println!("{:?}", filename);
-    let mut file = File::create(filename).unwrap();
+    // écriture des données dans un fichier
+    let mut file = File::create(req.headers().get("filename").unwrap().to_str().unwrap()).unwrap();
     file.write_all(&res).unwrap();
     HttpResponse::Ok().finish()
 }
@@ -188,21 +228,54 @@ async fn upload(mut body: web::Payload, req: HttpRequest) -> HttpResponse {
 #[get("/download")]
 async fn download(req: HttpRequest) -> HttpResponse {
     // lire et vérifier le Token
-    let token : &str = req.headers().get("Token").unwrap().to_str().unwrap();
-    if !check_token(token){
+    let filename: &str = req.headers().get("FileName").unwrap().to_str().unwrap();
+
+    if !check_token(&req) {
         return HttpResponse::NonAuthoritativeInformation().finish();
     }
-    HttpResponse::Ok().finish()
+
+    let work_file = env::current_dir().unwrap().join(&filename);
+    // ouvrir et lire le fichier
+    let mut file = match File::open(work_file) {
+        Ok(result) => result,
+        Err(_) => {
+            return HttpResponse::NoContent().finish();
+        }
+    };
+    let mut ciphertext: Vec<u8> = Vec::new();
+    file.read_to_end(&mut ciphertext).unwrap();
+
+    HttpResponse::Ok().body(ciphertext)
 }
 
 #[get("/list")]
 async fn get_list(req: HttpRequest) -> HttpResponse {
     // lire et vérifier le Token
-    let token : &str = req.headers().get("Token").unwrap().to_str().unwrap();
-    if !check_token(token){
+    let user: &str = req.headers().get("Username").unwrap().to_str().unwrap();
+    if !check_token(&req) {
         return HttpResponse::NonAuthoritativeInformation().finish();
     }
-    HttpResponse::Ok().finish()
+
+    let mut file_list: Vec<String> = Vec::new();
+    // on lit le contenu du répertoire
+    let paths = fs::read_dir("./").unwrap();
+
+    for path in paths {
+        let file = path.unwrap().path().into_os_string().into_string().unwrap();
+        // pour tous les fichiers est de type metadonnée
+        if file.contains(".metadata") {
+            let mut current_file = File::open(&file).expect("Unable to open the file");
+            let mut contents = String::new();
+            current_file
+                .read_to_string(&mut contents)
+                .expect("Unable to read the file");
+            let meta: Metadata = serde_json::from_str(&contents).unwrap();
+            if meta.username.contains(&user.to_string()) {
+                file_list.push(file.split(".metadata").collect());
+            }
+        }
+    }
+    HttpResponse::Ok().body(serde_json::to_string(&file_list).unwrap())
 }
 
 #[actix_web::main]
@@ -214,6 +287,8 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .service(username)
             .service(username_post)
+            .service(get_code)
+            .service(validate_code)
             .service(upload)
             .service(download)
             .service(get_list)
@@ -223,10 +298,21 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
-fn check_token (token:&str)-> bool{
+pub fn verifiy_2fa(user_secret: &str, token: String) -> bool {
+    let auth = GoogleAuthenticator::new();
+    if !auth.verify_code(user_secret, &token, 0, 0) {
+        println!("Mauvais code.");
+        return false;
+    }
+    true
+}
+
+fn check_token(req: &HttpRequest) -> bool {
+    let token: &str = req.headers().get("Token").unwrap().to_str().unwrap();
+    let user: &str = req.headers().get("Username").unwrap().to_str().unwrap();
     unsafe {
-        for pair in USER_TOKEN.iter(){
-            if pair.1 == token{
+        for pair in USER_TOKEN.iter() {
+            if pair.0 == user && pair.1 == token {
                 return true;
             }
         }
