@@ -1,5 +1,7 @@
 use crate::argon2id13::Salt;
 use actix_web::{get, post, web, HttpRequest, HttpResponse};
+use aead::{generic_array::GenericArray, Aead, NewAead};
+use aes_gcm::Aes256Gcm;
 use futures::StreamExt;
 use google_authenticator::{ErrorCorrectionLevel, GoogleAuthenticator};
 use hmac::{Hmac, Mac, NewMac};
@@ -63,6 +65,8 @@ let auth = GoogleAuthenticator::new();
             &mut key,
             "P@ssw0rd".as_bytes(),
             &salt,
+            /*argon2id13::OPSLIMIT_SENSITIVE,
+            argon2id13::MEMLIMIT_SENSITIVE,*/
             argon2id13::OPSLIMIT_INTERACTIVE,
             argon2id13::MEMLIMIT_INTERACTIVE,
         )
@@ -251,7 +255,19 @@ async fn download(req: HttpRequest) -> HttpResponse {
 #[get("/list")]
 async fn get_list(req: HttpRequest) -> HttpResponse {
     // lire et vérifier le Token
-    let user: &str = req.headers().get("Username").unwrap().to_str().unwrap();
+    let user_name: &str = req.headers().get("Username").unwrap().to_str().unwrap();
+    // check dans la DB si l'utilisateur est présent
+    let user = match USER_DB.get::<str>(&user_name.to_string()) {
+        Some(user) => user,
+        None => {
+            return HttpResponse::NotFound().finish();
+        }
+    };
+
+    // préparation des clés pour AES-GCM et du nonce
+    let key_aes = GenericArray::clone_from_slice(&user.password_kdf);
+    let aead = Aes256Gcm::new(key_aes);
+
     if !check_token(&req) {
         return HttpResponse::NonAuthoritativeInformation().finish();
     }
@@ -270,7 +286,7 @@ async fn get_list(req: HttpRequest) -> HttpResponse {
                 .read_to_string(&mut contents)
                 .expect("Unable to read the file");
             let meta: Metadata = serde_json::from_str(&contents).unwrap();
-            if meta.username.contains(&user.to_string()) {
+            if meta.username.contains(&user_name.to_string()) {
                 file_list.push(file.split(".metadata").collect());
             }
         }
